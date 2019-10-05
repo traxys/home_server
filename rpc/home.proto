@@ -1,0 +1,52 @@
+syntax = "proto3";
+package home_server;
+
+enum Status {
+	UNKNOWN = 0;
+	ON = 1;
+	OFF = 2;
+}
+
+message Object
+{
+	uint32 id = 1;
+}
+
+message GetInfoRequest
+{
+	Object object = 1;
+}
+message GetInfoReply
+{
+	string name = 1;
+	string kind = 2;
+	uint32 kind_id = 3;
+	Status status = 4;
+}
+
+message ListRequest
+{
+	// If kind_id is 0 it means all kinds
+	uint32 kind_id = 1;
+}
+message ListReply
+{
+	repeated Object objects = 1;
+}
+
+message ChangeStatusRequest
+{
+	Status status_request = 1;
+	Object target = 2;
+}
+message ChangeStatusReply
+{
+	Status new_status = 1;
+}
+
+service HomeServer
+{
+	rpc List(ListRequest) returns (ListReply);
+	rpc GetInfo(GetInfoRequest) returns (GetInfoReply);
+	rpc ChangeStatus(ChangeStatusRequest) returns (ChangeStatusReply);
+}
