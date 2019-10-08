@@ -18,6 +18,8 @@ log = "0.4.8"
 simplelog = "0.7.3"
 structopt = "0.3.2"
 http = "0.1.18"
+ron = "0.5.1"
+serde = "1.0.101"
 
 [build-dependencies]
 tower-grpc-build = {version = "0.1.0", features = ["tower-hyper"]}

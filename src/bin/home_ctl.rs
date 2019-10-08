@@ -1,7 +1,7 @@
 use structopt::StructOpt;
 
 #[derive(StructOpt)]
-#[structopt(name = "home-cli", about = "A CLI to do some things from your home")]
+#[structopt(name = "home-ctl", about = "A CLI to do some things from your home")]
 struct Config {
     #[structopt(
         about = "The address of the home server",
