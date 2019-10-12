@@ -12,41 +12,67 @@ message Object
 	uint32 id = 1;
 }
 
-message GetInfoRequest
+message GetObjectInfoRequest
 {
 	Object object = 1;
 }
-message GetInfoReply
+message GetObjectInfoReply
 {
 	string name = 1;
 	string kind = 2;
 	uint32 kind_id = 3;
+	string protocol = 5;
 	Status status = 4;
 }
 
-message ListRequest
+message ListDeviceRequest
 {
 	// If kind_id is 0 it means all kinds
 	uint32 kind_id = 1;
 }
-message ListReply
+message ListDeviceReply
 {
 	repeated Object objects = 1;
 }
 
-message ChangeStatusRequest
+message RegisterRequest
 {
-	Status status_request = 1;
-	Object target = 2;
+	string name = 1;
+	string kind = 2;
+	string protocol = 3;
 }
-message ChangeStatusReply
+message RegisterReply
 {
-	Status new_status = 1;
+	Object object = 1;
+}
+message CommandRequest
+{
+	bytes command = 1;
+}
+message CommandReply
+{
+	string reply = 1;
+}
+message Protocol
+{
+	string name = 1;
+	string desc = 2;
+	repeated string commands = 3;
+}
+
+message ListProtocolRequest
+{
+}
+message ListProtocolReply
+{
+	repeated Protocol protocols = 1;
 }
 
 service HomeServer
 {
-	rpc List(ListRequest) returns (ListReply);
-	rpc GetInfo(GetInfoRequest) returns (GetInfoReply);
-	rpc ChangeStatus(ChangeStatusRequest) returns (ChangeStatusReply);
+	rpc ListDevice(ListDeviceRequest) returns (ListDeviceReply);
+	rpc GetObjectInfo(GetObjectInfoRequest) returns (GetObjectInfoReply);
+	rpc Command(CommandRequest) returns (CommandReply);
+	rpc Register(RegisterRequest) returns (RegisterReply);
+	rpc ListProtocol(ListProtocolRequest) returns (ListProtocolReply);
 }
