@@ -1,11 +1,17 @@
 use structopt::StructOpt;
 
+mod objects;
+
+pub mod home_manager {
+    tonic::include_proto!("home_manager");
+}
+
 #[derive(StructOpt)]
 #[structopt(name = "home-ctl", about = "A CLI to do some things from your home")]
 struct Config {
     #[structopt(
         about = "The address of the home server",
-        default_value = "http://localhost:1456"
+        default_value = "http://localhost:14563"
     )]
     address: http::Uri,
     #[structopt(subcommand)]
@@ -35,25 +41,57 @@ enum Action {
         #[structopt(help = "the id of the object to query")]
         id: u64,
     },
-    #[structopt(about = "change the status of an object")]
-    ChangeStatus {
-        #[structopt(help = "the id of the object to change")]
-        target: u64,
-        #[structopt(help = "what to set the object to (on/off)")]
-        new_status: Status,
-    },
     #[structopt(about = "list objects, optionaly limit to a category")]
-    List {
+    ListDevice {
         #[structopt(help = "the optional category to search")]
-        category: Option<u64>,
+        category: Option<objects::ObjectKind>,
     },
+    #[structopt(about = "adds a new actionner")]
+    RegisterActionner {
+        #[structopt(help = "the remote location of the object (protocol dependent)", long, short)]
+        remote: String,
+        #[structopt(help = "the protocol used to communicate with the actionner", long, short)]
+        protocol: objects::Protocol,
+        #[structopt(help = "the actionner name", long, short)]
+        name: String,
+    },
+    #[structopt(about = "lists all actionners")]
+    ListActionners,
 }
 
-fn main() {
+use home_manager::{client::HomeManagerClient, ListDeviceRequest};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Config::from_args();
+    let mut client = HomeManagerClient::connect(args.address)?;
     match args.action {
         Action::GetInfo { .. } => println!("Info"),
-        Action::ChangeStatus { .. } => println!("ChangeStatus"),
-        Action::List { .. } => println!("List"),
+        Action::ListDevice { category } => {
+            let request = tonic::Request::new(ListDeviceRequest {
+                kind_id: category.map(|kind| kind.id()).unwrap_or(0),
+            });
+            let response = client.list_device(request).await?.into_inner();
+            println!("RESPONSE={:?}", response);
+        }
+        Action::RegisterActionner {
+            remote,
+            protocol,
+            name,
+        } => {
+            let request = tonic::Request::new(home_manager::RegisterActionnerRequest {
+                remote,
+                protocol: protocol.name(),
+                name,
+            });
+            let respsonse = client.register_actionner(request).await?.into_inner();
+            println!("RESPONSE={:?}", respsonse);
+        }
+        Action::ListActionners => {
+            let request = tonic::Request::new(home_manager::ListActionnerRequest{});
+            let respsonse = client.list_actionner(request).await?.into_inner();
+            println!("RESPONSE:{:?}", respsonse)
+        }
     }
+    Ok(())
 }

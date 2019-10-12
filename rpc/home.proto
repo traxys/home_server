@@ -1,5 +1,5 @@
 syntax = "proto3";
-package home_server;
+package home_manager;
 
 enum Status {
 	UNKNOWN = 0;
@@ -35,16 +35,28 @@ message ListDeviceReply
 	repeated Object objects = 1;
 }
 
-message RegisterRequest
+message RegisterObjectRequest
 {
 	string name = 1;
 	string kind = 2;
-	string protocol = 3;
+	uint32 actionner_id = 3;
 }
-message RegisterReply
+message RegisterObjectReply
 {
 	Object object = 1;
 }
+
+message RegisterActionnerRequest
+{
+	string protocol = 1;
+	string name = 2;
+	string remote = 3;
+}
+message RegisterActionnerReply
+{
+	uint32 id = 1;
+}
+
 message CommandRequest
 {
 	bytes command = 1;
@@ -67,12 +79,28 @@ message ListProtocolReply
 {
 	repeated Protocol protocols = 1;
 }
+message ListActionnerRequest
+{
+}
+message Actionner
+{
+	string protocol = 1;
+	string name = 2;
+	uint32 id = 3;
+}
+message ListActionnerReply
+{
+	repeated Actionner actionners = 1;
+}
 
-service HomeServer
+service HomeManager
 {
 	rpc ListDevice(ListDeviceRequest) returns (ListDeviceReply);
 	rpc GetObjectInfo(GetObjectInfoRequest) returns (GetObjectInfoReply);
 	rpc Command(CommandRequest) returns (CommandReply);
-	rpc Register(RegisterRequest) returns (RegisterReply);
+	rpc RegisterObject(RegisterObjectRequest) returns (RegisterObjectReply);
+	rpc RegisterActionner(RegisterActionnerRequest)
+		returns (RegisterActionnerReply);
+	rpc ListActionner(ListActionnerRequest) returns (ListActionnerReply);
 	rpc ListProtocol(ListProtocolRequest) returns (ListProtocolReply);
 }

@@ -8,18 +8,19 @@ default-run = "server"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tokio = "0.1.22"
-tower-grpc = {version = "0.1.1", features = ["tower-hyper"]}
-prost = "0.5.0"
+tonic = "0.1.0-alpha.3"
 bytes = "0.4.12"
-futures = "0.1.29"
-tower-hyper = "0.1.1"
-log = "0.4.8"
-simplelog = "0.7.3"
-structopt = "0.3.2"
+prost = "0.5.0"
+prost-derive = "0.5.0"
+structopt = "0.3.3"
 http = "0.1.18"
-ron = "0.5.1"
-serde = "1.0.101"
+tokio = "0.2.0-alpha.6"
+tracing = "0.1.9"
+tracing-subscriber = "0.1.5"
+sled = "0.28.0"
+dirs = "2.0.2"
+serde = { version = "1.0.101", features = ["derive"] }
+bincode = "1.2.0"
 
 [build-dependencies]
-tower-grpc-build = {version = "0.1.0", features = ["tower-hyper"]}
+tonic-build = "0.1.0-alpha.3"
