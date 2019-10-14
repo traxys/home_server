@@ -285,9 +285,9 @@ enum ArduinoCommand {
 impl ArduinoCommand {
     fn repr(&self) -> String {
         match self {
-            ArduinoCommand::Set { state: true, .. } => format!("on\n"),
-            ArduinoCommand::Set { state: false, .. } => format!("off\n"),
-            ArduinoCommand::Toggle { .. } => format!("tog\n"),
+            ArduinoCommand::Set { state: true, id } => format!("on {}\n", id),
+            ArduinoCommand::Set { state: false, id } => format!("off {}\n", id),
+            ArduinoCommand::Toggle { id } => format!("tog {}\n", id),
             ArduinoCommand::Check => format!("ard\n"),
         }
     }
