@@ -1,6 +1,7 @@
 use structopt::StructOpt;
 
 mod objects;
+mod commands;
 
 pub mod home_manager {
     tonic::include_proto!("home_manager");
@@ -36,10 +37,16 @@ impl std::str::FromStr for Status {
 
 #[derive(StructOpt)]
 enum Action {
-    #[structopt(about = "information on an object")]
-    GetInfo {
-        #[structopt(help = "the id of the object to query")]
-        id: u64,
+    #[structopt(about = "register a new device")]
+    RegisterDevice {
+        #[structopt(help = "the device name", long, short)]
+        name: String,
+        #[structopt(help = "the category of the device", long, short)]
+        kind: objects::ObjectKind, 
+        #[structopt(help = "the actionner driving this object", long, short)]
+        actionner_id: u32,
+        #[structopt(help = "the way to identify the object in the actionner", long, short)]
+        id_in_actionner: String,
     },
     #[structopt(about = "list objects, optionaly limit to a category")]
     ListDevice {
@@ -57,6 +64,20 @@ enum Action {
     },
     #[structopt(about = "lists all actionners")]
     ListActionners,
+    #[structopt(about = "issue an arduino command")]
+    Arduino {
+        #[structopt(help = "the id of the device")]
+        id: u32,
+        #[structopt(subcommand)]
+        command: ArduinoCommand,
+    }
+}
+
+#[derive(StructOpt)]
+pub enum ArduinoCommand {
+    On,
+    Off,
+    Toggle,
 }
 
 use home_manager::{client::HomeManagerClient, ListDeviceRequest};
@@ -66,7 +87,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Config::from_args();
     let mut client = HomeManagerClient::connect(args.address)?;
     match args.action {
-        Action::GetInfo { .. } => println!("Info"),
+        Action::Arduino{id: object_id, command} => {
+            let command = bincode::serialize(&match command {
+                ArduinoCommand::On => commands::ArduinoCommand::Set{state: true},
+                ArduinoCommand::Off => commands::ArduinoCommand::Set{state: false},
+                ArduinoCommand::Toggle => commands::ArduinoCommand::Toggle,
+            })?;
+            let request = tonic::Request::new(
+                home_manager::CommandRequest {
+                    command,
+                    object_id,
+                }
+            );
+            let respsonse = client.command(request).await?;
+            println!("RESPONSE={:?}", respsonse);
+        }
+        Action::RegisterDevice{name, actionner_id, id_in_actionner, kind} => {
+            let request = tonic::Request::new(
+                home_manager::RegisterDeviceRequest {
+                    kind: kind.name(),
+                    actionner_id,
+                    id_in_actionner,
+                    name,
+                });
+            let respsonse = client.register_device(request).await?.into_inner();
+            println!("RESPONSE={:?}", respsonse);
+        }
         Action::ListDevice { category } => {
             let request = tonic::Request::new(ListDeviceRequest {
                 kind_id: category.map(|kind| kind.id()).unwrap_or(0),

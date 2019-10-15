@@ -1,11 +1,13 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::{HashMap, HashSet}, sync::Arc};
 use tokio::sync::{mpsc, Mutex};
 use tonic::{transport::Server, Request, Response, Status};
 use tokio::prelude::*;
 use serde::{Serialize, Deserialize};
 
 mod objects;
-use objects::{Object, ObjectKind, Protocol};
+mod commands;
+use commands::ArduinoCommand;
+use objects::{Object, ObjectKind, Protocol, ActionnerId};
 
 pub mod home_manager {
     tonic::include_proto!("home_manager");
@@ -45,11 +47,12 @@ impl From<DeviceError> for ServerCreationError {
 
 impl HomeServer {
     pub async fn open(data_dir: std::path::PathBuf) -> Result<HomeServer, ServerCreationError> {
-        let devices = Arc::new(Mutex::new(Devices::open(data_dir.clone())?));
-        let actionners = Arc::new(Mutex::new(Actionners::open(data_dir).await?));
+        let actionners = Actionners::open(data_dir.clone()).await?;
+        let known_actionners = actionners.get_known();
+        let devices = Arc::new(Mutex::new(Devices::open(data_dir, &known_actionners)?));
         Ok(HomeServer {
             devices,
-            actionners,
+            actionners: Arc::new(Mutex::new(actionners)),
         })
     }
 }
@@ -59,10 +62,18 @@ pub struct Devices {
 }
 
 impl Devices {
-    pub fn add(&mut self, kind: ObjectKind, protocol: Protocol, name: String) -> Result<u32, DeviceError> {
+    pub fn get(&self, id: u32) -> Result<Option<Object>, DeviceError> {
+        let data: Object = match self.devices.get(bincode::serialize(&id)?)? {
+            Some(d) => bincode::deserialize(&d)?,
+            None => return Ok(None),
+        };
+        Ok(Some(data))
+    }
+    pub fn add(&mut self, kind: ObjectKind, actionner_id: u32, name: String, id_in_actionner: ActionnerId) -> Result<u32, DeviceError> {
         let new_obj = Object {
             kind,
-            protocol,
+            actionner_id,
+            id_in_actionner,
             name,
         };
         let id = self.next_id_to_assign;
@@ -70,23 +81,30 @@ impl Devices {
         self.devices.insert(bincode::serialize(&id)?, bincode::serialize(&new_obj)?)?;
         Ok(id)
     }
-    pub fn ids(&mut self) -> Result<Vec<u32>, DeviceError> {
-        let mut ids = Vec::with_capacity(self.devices.len());
+    pub fn list(&mut self) -> Result<Vec<(u32, Object)>, DeviceError> {
+        let mut list = Vec::with_capacity(self.devices.len());
         for entry in self.devices.iter() {
-            let (id, _) = entry?;
+            let (id, obj) = entry?;
             let id = bincode::deserialize(&id)?;
-            ids.push(id)
+            let obj = bincode::deserialize(&obj)?;
+            list.push((id, obj))
         }
-        Ok(ids)
+        Ok(list)
     }
-    pub fn open(mut data_dir: std::path::PathBuf) -> Result<Devices, DeviceError> {
+    pub fn open(mut data_dir: std::path::PathBuf, known_actionners: &HashSet<u32>) -> Result<Devices, DeviceError> {
         data_dir.push("devices");
         let mut devices = Devices {
             devices: sled::Db::open(data_dir)?,
             next_id_to_assign: 0,
         };
-        if let Some(n) = devices.ids()?.into_iter().max() {
-            devices.next_id_to_assign = n + 1;
+        for res in devices.devices.iter() {
+            let (id, data) = res?;
+            let d_id: u32 = bincode::deserialize(&id)?;
+            let data: Object = bincode::deserialize(&data)?;
+            devices.next_id_to_assign = std::cmp::max(devices.next_id_to_assign, d_id + 1);
+            if !known_actionners.contains(&data.actionner_id) {
+                devices.devices.remove(id)?;
+            }
         }
         Ok(devices)
     }
@@ -155,6 +173,18 @@ impl Actionners {
     pub fn get_list(&self) -> impl Iterator<Item = home_manager::Actionner> + '_ {
         self.actionners.iter().map(|(id, act)| home_manager::Actionner{id: *id, name: act.name.clone(), protocol: act.handler.protocol().name()})
     }
+    pub fn get_known(&self) -> HashSet<u32> {
+        self.get_list().map(|a| a.id).collect()
+    }
+    pub fn protocol(&self, id: u32) -> Option<Protocol> {
+        self.actionners.get(&id).map(|e| e.handler.protocol())
+    }
+    pub async fn act(&mut self, command: &[u8], object: &Object) -> Result<Option<CommandResult>, HandlerError> {
+        match self.actionners.get_mut(&object.actionner_id) {
+            Some(hdlr) => Ok(Some(hdlr.handler.command(command, object).await?)),
+            None => Ok(None),
+        }
+    }
 }
 #[derive(Serialize, Deserialize)]
 pub struct ActionnerData {
@@ -165,12 +195,12 @@ pub struct ActionnerData {
 #[derive(Debug)]
 pub enum ActionnerError {
     SerDeError(bincode::Error),
-    HandlerCreation(HandlerCreationError),
+    Handler(HandlerError),
     Database(sled::Error),
 }
-impl From<HandlerCreationError> for ActionnerError {
-    fn from(err: HandlerCreationError) -> Self {
-        Self::HandlerCreation(err)
+impl From<HandlerError> for ActionnerError {
+    fn from(err: HandlerError) -> Self {
+        Self::Handler(err)
     }
 }
 impl From<sled::Error> for ActionnerError {
@@ -195,18 +225,49 @@ impl HomeManager for HomeServer {
         _request: Request<ListDeviceRequest>,
     ) -> Result<Response<ListDeviceReply>, Status> {
         tracing::info!("Listing devices");
-        let ids = match self.devices.lock().await.ids() {
+        let list = match self.devices.lock().await.list() {
             Ok(i) => i,
             Err(_) => return Err(Status::new(tonic::Code::Internal, "internal error")),
         };
         let reply = ListDeviceReply {
-            objects: ids
+            objects: list
                 .into_iter()
-                .map(|id| home_manager::Object { id })
+                .map(|(id,obj)| home_manager::Object{id, actionner_id: obj.actionner_id, kind: obj.kind.name(), kind_id: obj.kind.id(), name: obj.name, id_in_actionner: obj.id_in_actionner.repr()})
                 .collect(),
         };
         Ok(Response::new(reply))
     }
+    async fn register_device(&self, request: Request<home_manager::RegisterDeviceRequest>)
+        -> Result<Response<home_manager::RegisterDeviceReply>, Status> {
+        let request = request.into_inner();
+        let kind: ObjectKind = match request.kind.parse() {
+            Ok(k) => k,
+            Err(_) => {
+                return Err(Status::new(tonic::Code::InvalidArgument, "invalid category"))
+            }
+        };
+        let protocol = match self.actionners.lock().await.protocol(request.actionner_id) {
+            Some(p) => p,
+            None => return Err(Status::new(tonic::Code::NotFound, "actionner not found")),
+        };
+        let id = match protocol {
+            Protocol::Arduino => ActionnerId::Arduino(match request.id_in_actionner.parse() {
+                Ok(i) => i,
+                Err(_) => return Err(Status::new(tonic::Code::InvalidArgument, "invalid id for protocol"))
+            }),
+            _ => unimplemented!(),
+        };
+        match self.devices.lock().await.add(kind, request.actionner_id, request.name, id) {
+            Err(e) => {
+                tracing::warn!("Internal error adding device: {:?}", e);
+                Err(Status::new(tonic::Code::Internal, ""))
+            }
+            Ok(id) => {
+                Ok(Response::new(home_manager::RegisterDeviceReply{id}))
+            }
+        }
+    }
+
     async fn list_actionner(
         &self,
         _request: Request<home_manager::ListActionnerRequest>
@@ -215,7 +276,6 @@ impl HomeManager for HomeServer {
          actionners: self.actionners.lock().await.get_list().collect()
         }))
     }
-
     async fn register_actionner(
         &self,
         request: Request<home_manager::RegisterActionnerRequest>,
@@ -239,19 +299,36 @@ impl HomeManager for HomeServer {
             Ok(id) => Ok(Response::new(home_manager::RegisterActionnerReply {
                 id
             })),
-            Err(ActionnerError::HandlerCreation(HandlerCreationError::IoError(e))) => Err(
+            Err(ActionnerError::Handler(HandlerError::IoError(e))) => Err(
                 tonic::Status::new(tonic::Code::Aborted, format!("could not create handler: {}", e))
             ),
-            Err(ActionnerError::HandlerCreation(HandlerCreationError::InvalidAddress)) => Err(
+            Err(ActionnerError::Handler(HandlerError::InvalidAddress)) => Err(
                 tonic::Status::new(tonic::Code::InvalidArgument, "invalid address")
             ),
-            Err(ActionnerError::HandlerCreation(HandlerCreationError::Internal)) => Err(
+            Err(ActionnerError::Handler(HandlerError::Internal)) => Err(
                 tonic::Status::new(tonic::Code::Internal, "error creating handler")
             ),
             Err(_) => Err(
                 tonic::Status::new(tonic::Code::Internal, "internal error")
             ),
         }
+    }
+
+    async fn command(&self, request: Request<home_manager::CommandRequest>) -> Result<Response<home_manager::CommandReply>, Status> {
+        let request = request.into_inner();
+        match self.devices.lock().await.get(request.object_id) {
+            Err(_) => return Err(tonic::Status::new(tonic::Code::Internal, "")),
+            Ok(None) => return Err(tonic::Status::new(tonic::Code::NotFound, "device not found")),
+            Ok(Some(obj)) => match self.actionners.lock().await.act(&request.command, &obj).await {
+                Ok(_) => (),  // One day
+                Err(e) => {
+                    tracing::warn!("Error in handler: {:?}", e);
+                    return Err(tonic::Status::new(tonic::Code::Internal, ""))
+                }
+            },
+        }
+        let response = Response::new(home_manager::CommandReply{reply: String::new()});
+        Ok(response)
     }
 }
 
@@ -262,34 +339,17 @@ struct ArduinoHandler {
     address: String,
 }
 impl ArduinoHandler {
-    async fn send(&self, command: ArduinoCommand) -> Result<(), tokio::io::Error> {
+    async fn send(&self, command: ArduinoCommand, intern_id: i8) -> Result<(), tokio::io::Error> {
         let mut stream = tokio::net::TcpStream::connect(&self.address).await?;
-        stream.write_all(command.repr().as_bytes()).await?;
+        stream.write_all(command.repr(intern_id).as_bytes()).await?;
         Ok(())
     }
     async fn check(&self) -> Result<bool, tokio::io::Error> {
         let mut stream = tokio::timer::Timeout::new(tokio::net::TcpStream::connect(&self.address), std::time::Duration::from_millis(100)).await??;
-        stream.write_all(ArduinoCommand::Check.repr().as_bytes()).await?;
+        stream.write_all(ArduinoCommand::Check.repr(0).as_bytes()).await?;
         let mut buffer = [0; 16];
         stream.read(&mut buffer).await?;
         Ok(&buffer[0..3] == b"yes")
-    }
-}
-
-enum ArduinoCommand {
-    Set { id: i8, state: bool },
-    Toggle { id: i8 },
-    Check,
-}
-
-impl ArduinoCommand {
-    fn repr(&self) -> String {
-        match self {
-            ArduinoCommand::Set { state: true, id } => format!("on {}\n", id),
-            ArduinoCommand::Set { state: false, id } => format!("off {}\n", id),
-            ArduinoCommand::Toggle { id } => format!("tog {}\n", id),
-            ArduinoCommand::Check => format!("ard\n"),
-        }
     }
 }
 
@@ -299,17 +359,25 @@ enum Handler {
 }
 
 #[derive(Debug)]
-pub enum HandlerCreationError {
+pub enum HandlerError {
     InvalidAddress,
     IoError(tokio::io::Error),
     Internal,
+    InvalidCommand(bincode::Error),
+    InvalidId,
 }
-
-impl From<tokio::io::Error> for HandlerCreationError {
+impl From<tokio::io::Error> for HandlerError {
     fn from(err: tokio::io::Error) -> Self {
         Self::IoError(err)
     }
 }
+impl From<bincode::Error> for HandlerError {
+    fn from(err: bincode::Error) -> Self {
+        Self::InvalidCommand(err)
+    }
+}
+
+type CommandResult = ();
 
 impl Handler {
     fn protocol(&self) -> Protocol {
@@ -318,18 +386,33 @@ impl Handler {
             Handler::SSH(_) => Protocol::SSH,
         }
     }
-    async fn new(protocol: Protocol, remote: String) -> Result<Handler, HandlerCreationError> {
+    async fn new(protocol: Protocol, remote: String) -> Result<Handler, HandlerError> {
         match protocol {
             Protocol::SSH => unimplemented!(),
             Protocol::Arduino => {
                 let handler = ArduinoHandler{address: remote};
                 if !handler.check().await? {
                     tracing::warn!("Arduino did not respond yes to ard request");
-                    return Err(HandlerCreationError::Internal)
+                    return Err(HandlerError::Internal)
                 }
                 Ok(Handler::Arduino(handler))
             }
         }
+    }
+    async fn command(&mut self, command: &[u8], object: &Object) -> Result<CommandResult, HandlerError> {
+        match self {
+            Handler::Arduino(arduino) => {
+                match object.id_in_actionner {
+                    ActionnerId::Arduino(id) => {
+                        let command: ArduinoCommand = bincode::deserialize(command)?;
+                        arduino.send(command, id).await?;
+                    }
+                    _ => return Err(HandlerError::InvalidId)
+                }
+            }
+            _ => unimplemented!(),
+        }
+        Ok(())
     }
 }
 

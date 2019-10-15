@@ -1,8 +1,23 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
+pub enum ActionnerId {
+    Arduino(i8),
+    SSH(String),
+}
+impl ActionnerId {
+    pub fn repr(&self) -> String {
+        match &self {
+            ActionnerId::Arduino(n) => format!("{}", n),
+            ActionnerId::SSH(s) => s.clone(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct Object {
-    pub protocol: Protocol,
+    pub actionner_id: u32,
+    pub id_in_actionner: ActionnerId,
     pub kind: ObjectKind,
     pub name: String,
 }
