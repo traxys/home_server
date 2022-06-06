@@ -10,7 +10,7 @@ default-run = "server"
 [dependencies]
 tonic = "0.1.0-alpha.3"
 bytes = "0.4.12"
-prost = "0.5.0"
+prost = "0.6.1"
 prost-derive = "0.5.0"
 structopt = "0.3.3"
 http = "0.1.18"
